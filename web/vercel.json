@@ -1,0 +1,6 @@
+{
+  "env": {
+    "FFA_SERVICE_URL": "@ffa_service_url",
+    "OGC_BASE_URL": "https://api.weather.gc.ca"
+  }
+}

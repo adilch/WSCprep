@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+web/.next/
+web/out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+ffa-service/.venv/
+scripts/build-catalog/.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# HYDAT (large binary — not committed)
+hydat/*.sqlite3
+hydat/Hydat_sqlite3*/
+
+# Generated catalog (committed after build)
+# web/public/data/stations.json  <- commit this one
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Vercel
+.vercel/
