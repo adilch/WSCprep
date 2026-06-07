@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="logo.svg" alt="WSCprep logo" height="52" />
+
 **An interactive web platform for exploring and analysing Water Survey of Canada stream-flow data**
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-ws--cprep.vercel.app-blue?style=for-the-badge&logo=vercel)](https://ws-cprep.vercel.app)
