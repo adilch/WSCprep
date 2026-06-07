@@ -52,76 +52,72 @@ def plotting_positions(values: np.ndarray, years: list[int], method: str) -> lis
     return result
 
 
+# Map each distribution key to its lmoments3 distribution object.
+# These are scipy rv_continuous subclasses, so .ppf/.cdf/.logpdf accept the
+# fitted parameter dict via **params directly — no hardcoded parameter names
+# or sign conventions to break across library versions. LP3 is PE3 fit in
+# log10 space (back-transformed in _quantile).
+LMOM_DIST = {
+    "gev": distr.gev,
+    "glo": distr.glo,
+    "gumbel": distr.gum,
+    "pe3": distr.pe3,
+    "lp3": distr.pe3,
+}
+
+
+def _is_log(dist_key: str) -> bool:
+    return dist_key == "lp3"
+
+
 def _quantile_from_params(dist_key: str, params: dict, p_nonexceed: float) -> float:
-    """Return quantile for non-exceedance probability p."""
-    if dist_key == "gev":
-        return float(stats.genextreme.ppf(p_nonexceed, c=-params["k"], loc=params["loc"], scale=params["scale"]))
-    if dist_key == "glo":
-        return float(distr.glo.ppf(p_nonexceed, **params))
-    if dist_key == "gumbel":
-        return float(stats.gumbel_r.ppf(p_nonexceed, loc=params["loc"], scale=params["scale"]))
-    if dist_key in ("pe3", "lp3"):
-        return float(distr.pe3.ppf(p_nonexceed, **params))
-    raise ValueError(f"Unknown dist: {dist_key}")
+    """Return quantile for non-exceedance probability p (in fit space)."""
+    return float(LMOM_DIST[dist_key].ppf(p_nonexceed, **params))
 
 
 def _loglik(dist_key: str, params: dict, data: np.ndarray) -> float:
     try:
-        if dist_key == "gev":
-            return float(np.sum(stats.genextreme.logpdf(data, c=-params["k"], loc=params["loc"], scale=params["scale"])))
-        if dist_key == "glo":
-            return float(np.sum(distr.glo.logpdf(data, **params)))
-        if dist_key == "gumbel":
-            return float(np.sum(stats.gumbel_r.logpdf(data, loc=params["loc"], scale=params["scale"])))
-        if dist_key in ("pe3", "lp3"):
-            return float(np.sum(distr.pe3.logpdf(data, **params)))
+        return float(np.sum(LMOM_DIST[dist_key].logpdf(data, **params)))
     except Exception:
         return float("-inf")
-    return float("-inf")
 
 
 def _fit_lmoments(dist_key: str, data: np.ndarray) -> dict:
-    fit_data = np.log10(data) if dist_key == "lp3" else data
-    if dist_key == "gev":
-        return distr.gev.lmom_fit(fit_data)
-    if dist_key == "glo":
-        return distr.glo.lmom_fit(fit_data)
-    if dist_key == "gumbel":
-        return distr.gum.lmom_fit(fit_data)
-    if dist_key in ("pe3", "lp3"):
-        return distr.pe3.lmom_fit(fit_data)
-    raise ValueError(f"Unknown dist: {dist_key}")
+    fit_data = np.log10(data) if _is_log(dist_key) else data
+    return dict(LMOM_DIST[dist_key].lmom_fit(fit_data))
 
 
 def _fit_mom_lp3(data: np.ndarray) -> dict:
+    """Method-of-moments LP3: product moments of log10(Q) map to PE3 params."""
     log_q = np.log10(data)
     mu, sigma, skew = float(np.mean(log_q)), float(np.std(log_q, ddof=1)), float(stats.skew(log_q))
-    return {"loc": mu, "scale": sigma, "skew": skew}
+    return {"skew": skew, "loc": mu, "scale": sigma}
 
 
 def _quantile(dist_key: str, params: dict, return_period: float) -> float:
     p = 1.0 - 1.0 / return_period
     q = _quantile_from_params(dist_key, params, p)
-    return 10**q if dist_key == "lp3" else q
+    return 10**q if _is_log(dist_key) else q
+
+
+def _ad_statistic(dist_key: str, params: dict, fit_data: np.ndarray) -> float:
+    """Anderson-Darling statistic against the fitted CDF."""
+    obj = LMOM_DIST[dist_key]
+    x = np.sort(fit_data)
+    n = len(x)
+    F = np.clip(obj.cdf(x, **params), 1e-12, 1 - 1e-12)
+    i = np.arange(1, n + 1)
+    s = np.sum((2 * i - 1) * (np.log(F) + np.log(1 - F[::-1])))
+    return float(-n - s / n)
 
 
 def _ks_ad(dist_key: str, params: dict, data: np.ndarray):
     try:
-        def cdf(x):
-            if dist_key == "gev":
-                return stats.genextreme.cdf(x, c=-params["k"], loc=params["loc"], scale=params["scale"])
-            if dist_key == "glo":
-                return distr.glo.cdf(x, **params)
-            if dist_key == "gumbel":
-                return stats.gumbel_r.cdf(x, loc=params["loc"], scale=params["scale"])
-            if dist_key in ("pe3", "lp3"):
-                return distr.pe3.cdf(x, **params)
-            return np.zeros_like(x)
-
-        fit_data = np.log10(data) if dist_key == "lp3" else data
-        ks = stats.kstest(fit_data, cdf)
-        ad_result = stats.anderson(fit_data)
-        return float(ks.statistic), float(ks.pvalue), float(ad_result.statistic)
+        obj = LMOM_DIST[dist_key]
+        fit_data = np.log10(data) if _is_log(dist_key) else data
+        ks = stats.kstest(fit_data, lambda x: obj.cdf(x, **params))
+        ad_stat = _ad_statistic(dist_key, params, fit_data)
+        return float(ks.statistic), float(ks.pvalue), ad_stat
     except Exception:
         return float("nan"), float("nan"), float("nan")
 
@@ -154,6 +150,12 @@ def fit_distribution(
         fit_data = np.log10(data) if dist_key == "lp3" else data
         ll = _loglik(dist_key, params, fit_data)
         n = len(data)
+        # LP3 is fit in log10 space, so its log-likelihood is on log10(Q), not Q.
+        # Apply the change-of-variables (Jacobian) correction so its AIC/BIC are
+        # comparable to distributions fit in Q-space. For Y=log10(X):
+        #   log f_X(x) = log f_Y(y) - log(x) - log(ln 10)
+        if dist_key == "lp3":
+            ll = ll - float(np.sum(np.log(data))) - n * float(np.log(np.log(10.0)))
         aic = 2 * k - 2 * ll
         bic = k * np.log(n) - 2 * ll
 
