@@ -2,7 +2,7 @@ services:
   - type: web
     name: wscprep
     runtime: python
-    buildCommand: pip3 install --break-system-packages -r requirements.txt
+    buildCommand: pip install -r requirements.txt && echo "=== UVICORN PATH ===" && pip show uvicorn && echo "=== PIP BIN ===" && dirname $(which pip)
     startCommand: python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
