@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+tests/
+.python-version
+runtime.txt
+Procfile
+render.yaml
