@@ -35,7 +35,7 @@ const ALL_DISTRIBUTIONS = ["gev", "glo", "gumbel", "lp3", "pe3"];
 const fmt = (v: number | null | undefined, dp: number): string =>
   v == null || !isFinite(v) ? "—" : v.toFixed(dp);
 
-const DEFAULT_RETURN_PERIODS = [2, 5, 10, 20, 25, 50, 100, 200, 500];
+const DEFAULT_RETURN_PERIODS = [2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000];
 const VALID_TABS = ["peaks", "freq", "table", "gof", "trend", "pot"] as const;
 type FfaTab = (typeof VALID_TABS)[number];
 
@@ -680,7 +680,9 @@ export function FrequencyView({ stationId }: { stationId: string }) {
                     layout={{
                       title: { text: strings.ffa.frequencyPlot },
                       xaxis: { title: { text: "Return Period (yr)" }, type: "log",
-                        tickvals: [2, 5, 10, 20, 50, 100, 200, 500] },
+                        tickvals: [2, 5, 10, 20, 50, 100, 200, 500, 1000, 10000],
+                        ticktext: ["2", "5", "10", "20", "50", "100", "200", "500", "1,000", "10,000"],
+                        range: [Math.log10(1.5), Math.log10(15000)] },
                       yaxis: { title: { text: "Peak Discharge (m³/s)" } },
                       height: 480, legend: { orientation: "h", y: -0.25 },
                       margin: { l: 70, r: 20, t: 50, b: 100 },

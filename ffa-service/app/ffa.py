@@ -204,7 +204,7 @@ def fit_distribution(
         # Dense curve for smooth plotting
         curve_rps = np.unique(
             np.concatenate([
-                np.logspace(np.log10(1.01), np.log10(1000), 200),
+                np.logspace(np.log10(1.01), np.log10(12000), 300),
                 return_periods,
             ])
         )
