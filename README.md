@@ -13,6 +13,33 @@
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="screenshots/sc1.png" alt="Station discovery map — all WSC stations colour-coded by record length, with a station popup open" />
+      <br /><sub><b>Station Discovery Map</b> — ~2,000 WSC stations colour-coded by record length; click any marker for instant station details</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="screenshots/sc2.png" alt="Mean Annual Regime chart showing snowmelt peak in June–July with Q10–Q90 uncertainty band" />
+      <br /><sub><b>Annual Regime</b> — mean daily discharge through the year with Q10–Q90 variability band; clear snowmelt peak visible in June–July</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="screenshots/sc3.png" alt="Flood Frequency Analysis — multiple fitted distributions plotted against observed annual maxima on a log return-period axis" />
+      <br /><sub><b>Flood Frequency Analysis</b> — GEV, LP3, Gumbel, and Pearson III fitted to the annual maximum series; 90 % confidence interval shown</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="screenshots/sc4.png" alt="Low-flow statistics table (nQy) and annual 7-day minimum discharge bar chart with 7Q10 and 7Q2 reference lines" />
+      <br /><sub><b>Low-Flow Statistics</b> — nQy table (7Q2, 7Q10) plus annual 7-day minimum discharge; 7-day window follows the Canadian regulatory standard</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## What It Does
 
 Water Survey of Canada (WSC) operates ~2,000 active hydrometric stations across Canada. This app gives you instant, browser-based access to all of them — no software to install, no local database to maintain. It pulls live data from Environment and Climate Change Canada's national HYDAT database via their OGC API, runs analyses on the fly, and delivers publication-ready results.
