@@ -30,7 +30,7 @@ export function StationHeader({ station }: { station: Station }) {
   );
 
   return (
-    <div className="sticky top-0 z-40 bg-white border-b border-gray-200 shadow-sm">
+    <div className="print-hide sticky top-0 z-40 bg-white border-b border-gray-200 shadow-sm">
       <div className="max-w-screen-xl mx-auto px-4 pt-3 pb-0">
         {/* Title row */}
         <div className="flex flex-wrap items-start gap-2 mb-2">

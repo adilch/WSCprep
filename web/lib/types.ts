@@ -122,4 +122,6 @@ export interface FrequencyRequest {
   confidence_level: number;
   ci_method: "bootstrap" | "none";
   bootstrap_samples: number;
+  /** Optional pre-filtered peak list; if supplied the API skips its own OGC fetch. */
+  peaks?: PeakPoint[];
 }

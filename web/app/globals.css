@@ -16,3 +16,55 @@ body {
   height: 100%;
   width: 100%;
 }
+
+/* ── Print / PDF styles ───────────────────────────────────────────────────── */
+@media print {
+  /* Hide all chrome — nav, station header, buttons */
+  nav,
+  .print-hide,
+  button,
+  [role="navigation"],
+  .report-print-btn {
+    display: none !important;
+  }
+
+  /* Reset body for paper */
+  body {
+    font-size: 10pt;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Charts fill the full column width and avoid page breaks within */
+  .report-chart {
+    width: 100% !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Each report section starts on a new page (except the very first) */
+  .report-section {
+    break-before: page;
+    page-break-before: always;
+  }
+  .report-section:first-of-type {
+    break-before: auto;
+    page-break-before: auto;
+  }
+
+  /* Tighten tables for paper */
+  table {
+    font-size: 9pt;
+    width: 100%;
+  }
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Ensure the report root fills the page */
+  #report-root {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}
