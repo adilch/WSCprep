@@ -17,6 +17,23 @@ body {
   width: 100%;
 }
 
+/* ── FFA loading animation ───────────────────────────────────────────────── */
+@keyframes ffa-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(420%); }
+}
+@keyframes ffa-stage-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.97); }
+  50%       { opacity: 1;    transform: scale(1.0);  }
+}
+.ffa-progress-bar {
+  width: 30%;
+  animation: ffa-slide 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.ffa-stage-pill {
+  animation: ffa-stage-pulse 1.2s ease-in-out infinite;
+}
+
 /* ── Print / PDF styles ───────────────────────────────────────────────────── */
 @media print {
   /* Hide all chrome — nav, station header, buttons */

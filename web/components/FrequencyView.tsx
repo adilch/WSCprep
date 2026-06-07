@@ -454,8 +454,57 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       {peaksErr && <Callout level="caution">Peaks load error: {peaksErr}</Callout>}
 
       {loading && (
-        <div className="flex items-center justify-center h-32 text-gray-400">
-          {strings.ffa.loading}
+        <div className="flex flex-col items-center justify-center py-16 gap-5">
+
+          {/* Spinner ring with chart icon inside */}
+          <div className="relative w-16 h-16">
+            {/* Static track */}
+            <div className="absolute inset-0 rounded-full border-[3px] border-blue-100" />
+            {/* Spinning arc */}
+            <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-blue-600 animate-spin" />
+            {/* Centre icon */}
+            <div className="absolute inset-0 flex items-center justify-center text-blue-400">
+              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="2"  y="13" width="4" height="8" rx="1" opacity="0.6" />
+                <rect x="9"  y="8"  width="4" height="13" rx="1" opacity="0.8" />
+                <rect x="16" y="3"  width="4" height="18" rx="1" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Status text */}
+          <div className="text-center space-y-1">
+            <p className="text-sm font-semibold text-gray-700">Running flood frequency analysis…</p>
+            <p className="text-xs text-gray-400">
+              Fitting {options.distributions.length} distribution{options.distributions.length !== 1 ? "s" : ""}&nbsp;·&nbsp;
+              {options.bootstrap_samples.toLocaleString()} bootstrap samples&nbsp;·&nbsp;
+              {peaksForFfa.length} peak years
+            </p>
+          </div>
+
+          {/* Indeterminate progress bar */}
+          <div className="w-72 h-1.5 bg-blue-100 rounded-full overflow-hidden">
+            <div className="ffa-progress-bar h-full bg-blue-500 rounded-full" />
+          </div>
+
+          {/* Stage pills — staggered pulse */}
+          <div className="flex gap-2 flex-wrap justify-center">
+            {[
+              "Fetching peaks",
+              `${options.distributions.map((d) => d.toUpperCase()).join(" · ")}`,
+              `${Math.round(options.confidence_level * 100)}% CI`,
+              "Model selection",
+            ].map((label, i) => (
+              <span
+                key={label}
+                className="ffa-stage-pill px-3 py-1 rounded-full text-xs font-medium
+                           bg-blue-50 text-blue-600 border border-blue-200"
+                style={{ animationDelay: `${i * 0.3}s` }}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
