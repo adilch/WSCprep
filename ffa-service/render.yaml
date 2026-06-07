@@ -2,8 +2,8 @@ services:
   - type: web
     name: wscprep
     runtime: python
-    buildCommand: pip install -r requirements.txt && ln -sf /opt/render/project/python/bin/uvicorn /usr/local/bin/uvicorn
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip3 install --break-system-packages -r requirements.txt
+    startCommand: python3 -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.9
