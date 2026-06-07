@@ -1,0 +1,10 @@
+{
+  "buildCommand": "cd web && npm install && npm run build",
+  "outputDirectory": "web/.next",
+  "installCommand": "cd web && npm install",
+  "framework": "nextjs",
+  "env": {
+    "FFA_SERVICE_URL": "@ffa_service_url",
+    "OGC_BASE_URL": "https://api.weather.gc.ca"
+  }
+}

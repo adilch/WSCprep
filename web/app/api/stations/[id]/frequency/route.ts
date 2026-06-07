@@ -1,27 +1,45 @@
 import { NextResponse } from "next/server";
-import type { FrequencyRequest } from "@/lib/types";
+import { fetchAnnualPeaks } from "@/lib/ogc";
+import type { FrequencyRequest, PeakPoint } from "@/lib/types";
 
 const FFA_SERVICE_URL = process.env.FFA_SERVICE_URL ?? "http://localhost:8000";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const body = (await req.json()) as FrequencyRequest & { peaks?: unknown[] };
+  const stationId = id.toUpperCase();
+  const body = (await req.json()) as FrequencyRequest & { peaks?: PeakPoint[] };
 
-  let peaks = body.peaks;
-
-  if (!peaks) {
-    const peaksRes = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/stations/${id}/peaks`
-    );
-    if (!peaksRes.ok) {
-      return NextResponse.json({ error: "Failed to fetch peaks" }, { status: 502 });
+  // Fetch peaks directly from OGC (no HTTP self-call)
+  let peaks: PeakPoint[] = body.peaks ?? [];
+  if (!peaks.length) {
+    try {
+      const features = await fetchAnnualPeaks(stationId);
+      peaks = features
+        .filter(
+          (f) =>
+            f.properties.DATA_TYPE_EN?.toLowerCase().includes("discharge") &&
+            f.properties.PEAK_CODE_EN?.toLowerCase().includes("maximum") &&
+            f.properties.PEAK !== null
+        )
+        .map((f) => {
+          const date = f.properties.DATE ?? "";
+          return {
+            year: parseInt(date.slice(0, 4), 10),
+            value: f.properties.PEAK!,
+            date: date || undefined,
+            symbol: f.properties.SYMBOL_EN ?? null,
+          };
+        })
+        .filter((p) => !isNaN(p.year))
+        .sort((a, b) => a.year - b.year);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      return NextResponse.json({ error: `Failed to fetch peaks: ${msg}` }, { status: 502 });
     }
-    const data = await peaksRes.json();
-    peaks = data.peaks;
   }
 
   const payload = {
-    station_id: id.toUpperCase(),
+    station_id: stationId,
     variable: "discharge",
     peaks,
     distributions: body.distributions ?? ["gev", "glo", "gumbel", "lp3", "pe3"],
