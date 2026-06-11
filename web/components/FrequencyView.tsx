@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import type {
   FrequencyResponse, FrequencyRequest, PeakPoint, PeaksResponse, DailyPoint,
@@ -41,7 +41,6 @@ type FfaTab = (typeof VALID_TABS)[number];
 
 export function FrequencyView({ stationId }: { stationId: string }) {
   const searchParams = useSearchParams();
-  const router      = useRouter();
   const pathname    = usePathname();
 
   // ── Tab from URL ──────────────────────────────────────────────────────────
@@ -55,15 +54,23 @@ export function FrequencyView({ stationId }: { stationId: string }) {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
-  const [options, setOptions] = useState<Omit<FrequencyRequest, "peaks">>({
-    distributions:    ALL_DISTRIBUTIONS,
-    estimation_method: "lmoments",
-    plotting_position: "cunnane",
-    return_periods:    DEFAULT_RETURN_PERIODS,
-    exclude_estimated: true,
-    confidence_level:  0.9,
-    ci_method:         "bootstrap",
-    bootstrap_samples: 2000,
+  // Options restored from URL params so a copied link reproduces the analysis.
+  const [options, setOptions] = useState<Omit<FrequencyRequest, "peaks">>(() => {
+    const dist = searchParams.get("dist")?.split(",")
+      .filter((d) => ALL_DISTRIBUTIONS.includes(d));
+    const est = searchParams.get("est");
+    const pp  = searchParams.get("pp");
+    return {
+      distributions:    dist?.length ? dist : ALL_DISTRIBUTIONS,
+      estimation_method: est === "mom" ? "mom" : "lmoments",
+      plotting_position:
+        pp === "weibull" || pp === "gringorten" ? pp : "cunnane",
+      return_periods:    DEFAULT_RETURN_PERIODS,
+      exclude_estimated: searchParams.get("inclEst") !== "1",
+      confidence_level:  searchParams.get("cl") === "0.95" ? 0.95 : 0.9,
+      ci_method:         "bootstrap",
+      bootstrap_samples: 2000,
+    };
   });
 
   // ── Annual peaks (fetched independently) ──────────────────────────────────
@@ -77,9 +84,45 @@ export function FrequencyView({ stationId }: { stationId: string }) {
   }, [peaks]);
 
   const [yearRange, setYearRange] = useState<[number, number] | null>(null);
-  useEffect(() => { if (peaksYearRange) setYearRange(peaksYearRange); }, [peaksYearRange]);
 
-  const [excludedYears, setExcludedYears] = useState<Set<number>>(new Set());
+  // Year range requested via URL (?yr=1975-2010) — applied once when peaks load.
+  const urlYearRangeRef = useRef<[number, number] | null>((() => {
+    const m = /^(\d{4})-(\d{4})$/.exec(searchParams.get("yr") ?? "");
+    if (!m) return null;
+    const lo = Number(m[1]), hi = Number(m[2]);
+    return lo < hi ? [lo, hi] : null;
+  })());
+
+  // Re-run analysis after URL-restored range/exclusions are applied to refs.
+  const [needsRerun, setNeedsRerun] = useState(false);
+
+  const [excludedYears, setExcludedYears] = useState<Set<number>>(() => {
+    const ex = searchParams.get("ex");
+    if (!ex) return new Set();
+    return new Set(
+      ex.split(",").map(Number).filter((y) => Number.isInteger(y) && y > 1800)
+    );
+  });
+
+  useEffect(() => {
+    if (!peaksYearRange) return;
+    const u = urlYearRangeRef.current;
+    urlYearRangeRef.current = null; // apply once
+    let applied = false;
+    if (u) {
+      const lo = Math.max(peaksYearRange[0], u[0]);
+      const hi = Math.min(peaksYearRange[1], u[1]);
+      if (lo < hi && (lo !== peaksYearRange[0] || hi !== peaksYearRange[1])) {
+        setYearRange([lo, hi]);
+        applied = true;
+      }
+    }
+    if (!applied) setYearRange(peaksYearRange);
+    // The mount-time auto-run races the peaks fetch, so restored filters
+    // wouldn't be in that request — trigger a corrective run.
+    if (applied || excludedYearsRef.current.size > 0) setNeedsRerun(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peaksYearRange]);
 
   const peaksRef         = useRef(peaks);
   const yearRangeRef     = useRef(yearRange);
@@ -92,10 +135,16 @@ export function FrequencyView({ stationId }: { stationId: string }) {
   const [dailySeries,    setDailySeries]    = useState<DailyPoint[] | null>(null);
   const [dailyLoading,   setDailyLoading]   = useState(false);
   const [dailyError,     setDailyError]     = useState<string | null>(null);
-  const [potThreshPct,   setPotThreshPct]   = useState(90);
-  const [potManualVal,   setPotManualVal]   = useState("");
-  const [potManualMode,  setPotManualMode]  = useState(false);
-  const [potSepGap,      setPotSepGap]      = useState(7);
+  const [potThreshPct,   setPotThreshPct]   = useState(() => {
+    const v = parseInt(searchParams.get("pthr") ?? "", 10);
+    return v >= 50 && v <= 99 ? v : 90;
+  });
+  const [potManualVal,   setPotManualVal]   = useState(() => searchParams.get("pman") ?? "");
+  const [potManualMode,  setPotManualMode]  = useState(() => searchParams.get("pman") !== null);
+  const [potSepGap,      setPotSepGap]      = useState(() => {
+    const v = parseInt(searchParams.get("pgap") ?? "", 10);
+    return [3, 7, 14, 30].includes(v) ? v : 7;
+  });
 
   // ── Fetch peaks on mount ──────────────────────────────────────────────────
   useEffect(() => {
@@ -124,14 +173,36 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       .finally(() => setDailyLoading(false));
   }, [tab, stationId, dailySeries, dailyLoading]);
 
-  // ── URL sync (tab) ────────────────────────────────────────────────────────
+  // ── URL sync — full analysis state, defaults omitted for clean URLs ──────
+  // Uses history.replaceState (integrates with the Next router) so slider
+  // moves don't trigger server round-trips.
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (tab !== "freq") params.set("tab", tab);
-    const qs = params.size ? `?${params.toString()}` : "";
-    router.replace(`${pathname}${qs}`, { scroll: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+    const p = new URLSearchParams();
+    if (tab !== "freq") p.set("tab", tab);
+    if (options.distributions.length !== ALL_DISTRIBUTIONS.length)
+      p.set("dist", options.distributions.join(","));
+    if (options.estimation_method !== "lmoments") p.set("est", options.estimation_method);
+    if (options.plotting_position !== "cunnane")  p.set("pp", options.plotting_position);
+    if (options.confidence_level !== 0.9)         p.set("cl", String(options.confidence_level));
+    if (!options.exclude_estimated)               p.set("inclEst", "1");
+    if (peaksYearRange && yearRange &&
+        (yearRange[0] !== peaksYearRange[0] || yearRange[1] !== peaksYearRange[1]))
+      p.set("yr", `${yearRange[0]}-${yearRange[1]}`);
+    if (excludedYears.size > 0)
+      p.set("ex", [...excludedYears].sort((a, b) => a - b).join(","));
+    if (potManualMode) {
+      if (potManualVal) p.set("pman", potManualVal);
+    } else if (potThreshPct !== 90) {
+      p.set("pthr", String(potThreshPct));
+    }
+    if (potSepGap !== 7) p.set("pgap", String(potSepGap));
+
+    const qs  = p.toString();
+    const url = qs ? `${pathname}?${qs}` : pathname;
+    if (`${window.location.pathname}${window.location.search}` !== url)
+      window.history.replaceState(null, "", url);
+  }, [tab, options, yearRange, peaksYearRange, excludedYears,
+      potManualMode, potManualVal, potThreshPct, potSepGap, pathname]);
 
   // ── Derived peaks lists ───────────────────────────────────────────────────
   const peaksInRange = useMemo<PeakPoint[]>(() => {
@@ -237,6 +308,26 @@ export function FrequencyView({ stationId }: { stationId: string }) {
   }, [stationId, options]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { runAnalysis(); }, [runAnalysis]);
+
+  // Corrective re-run once URL-restored filters are reflected in the refs.
+  useEffect(() => {
+    if (!needsRerun) return;
+    setNeedsRerun(false);
+    runAnalysis();
+  }, [needsRerun, runAnalysis]);
+
+  // ── Copy shareable link ───────────────────────────────────────────────────
+  const [copied, setCopied] = useState(false);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable (e.g. insecure context) — select-and-copy fallback
+      window.prompt("Copy this link:", window.location.href);
+    }
+  };
 
   // ── Downloads ─────────────────────────────────────────────────────────────
   const downloadFreqCsv = () => {
@@ -396,10 +487,17 @@ export function FrequencyView({ stationId }: { stationId: string }) {
             </div>
           )}
 
-          <button onClick={runAnalysis} disabled={loading}
-            className="ml-auto bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors self-end">
-            {loading ? "Running…" : "Run Analysis"}
-          </button>
+          <div className="ml-auto flex gap-2 self-end">
+            <button onClick={copyLink}
+              title="Copy a link that reproduces this exact analysis"
+              className="border border-gray-300 bg-white text-gray-600 px-3 py-2 rounded text-sm hover:bg-gray-100 transition-colors">
+              {copied ? "✓ Copied" : "🔗 Copy link"}
+            </button>
+            <button onClick={runAnalysis} disabled={loading}
+              className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              {loading ? "Running…" : "Run Analysis"}
+            </button>
+          </div>
         </div>
 
         {peaks && (
