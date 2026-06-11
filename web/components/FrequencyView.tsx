@@ -4,7 +4,12 @@ import { useSearchParams, usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import type {
   FrequencyResponse, FrequencyRequest, PeakPoint, PeaksResponse, DailyPoint,
+  Station,
 } from "@/lib/types";
+import {
+  transferScaleFactor, findNearbyDonors, DEFAULT_TRANSFER_EXPONENT,
+  AREA_RATIO_VALID_MIN, AREA_RATIO_VALID_MAX,
+} from "@/lib/transfer";
 import { fmtDischarge, fmtAep } from "@/lib/format";
 import { strings } from "@/lib/strings";
 import { Callout } from "./Callout";
@@ -36,7 +41,7 @@ const fmt = (v: number | null | undefined, dp: number): string =>
   v == null || !isFinite(v) ? "—" : v.toFixed(dp);
 
 const DEFAULT_RETURN_PERIODS = [2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000];
-const VALID_TABS = ["peaks", "freq", "table", "gof", "trend", "pot"] as const;
+const VALID_TABS = ["peaks", "freq", "table", "gof", "trend", "pot", "transfer"] as const;
 type FfaTab = (typeof VALID_TABS)[number];
 
 export function FrequencyView({ stationId }: { stationId: string }) {
@@ -146,6 +151,17 @@ export function FrequencyView({ stationId }: { stationId: string }) {
     return [3, 7, 14, 30].includes(v) ? v : 7;
   });
 
+  // ── Area-ratio transfer state ─────────────────────────────────────────────
+  const [station,         setStation]         = useState<Station | null>(null);
+  const [catalog,         setCatalog]         = useState<Station[] | null>(null);
+  const [transferLoading, setTransferLoading] = useState(false);
+  const [transferError,   setTransferError]   = useState<string | null>(null);
+  const [siteAreaStr,     setSiteAreaStr]     = useState(() => searchParams.get("ta") ?? "");
+  const [transferExp,     setTransferExp]     = useState(() => {
+    const v = parseFloat(searchParams.get("tn") ?? "");
+    return v >= 0.3 && v <= 1.2 ? v : DEFAULT_TRANSFER_EXPONENT;
+  });
+
   // ── Fetch peaks on mount ──────────────────────────────────────────────────
   useEffect(() => {
     async function loadPeaks() {
@@ -173,6 +189,39 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       .finally(() => setDailyLoading(false));
   }, [tab, stationId, dailySeries, dailyLoading]);
 
+  // ── Lazy-fetch station metadata + catalog when Transfer tab is visited ────
+  useEffect(() => {
+    if (tab !== "transfer" || (station && catalog) || transferLoading) return;
+    setTransferLoading(true);
+    setTransferError(null);
+    Promise.all([
+      station ?? fetch(`/api/stations/${stationId}`)
+        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
+      catalog ?? fetch(`/api/stations`)
+        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
+    ])
+      .then(([st, cat]) => { setStation(st); setCatalog(cat); })
+      .catch((e) => setTransferError(e instanceof Error ? e.message : "Failed to load station data"))
+      .finally(() => setTransferLoading(false));
+  }, [tab, stationId, station, catalog, transferLoading]);
+
+  // ── Transfer derived values ───────────────────────────────────────────────
+  const siteArea = useMemo(() => {
+    const v = parseFloat(siteAreaStr);
+    return isFinite(v) && v > 0 ? v : null;
+  }, [siteAreaStr]);
+
+  const donorArea   = station?.drainage_area_gross_km2 ?? null;
+  const areaRatio   = siteArea !== null && donorArea ? siteArea / donorArea : null;
+  const scaleFactor = siteArea !== null && donorArea
+    ? transferScaleFactor(siteArea, donorArea, transferExp) : null;
+
+  const nearbyDonors = useMemo(() => {
+    if (!catalog || !station) return null;
+    return findNearbyDonors(
+      catalog, station.latitude, station.longitude, station.station_number, 8);
+  }, [catalog, station]);
+
   // ── URL sync — full analysis state, defaults omitted for clean URLs ──────
   // Uses history.replaceState (integrates with the Next router) so slider
   // moves don't trigger server round-trips.
@@ -196,13 +245,16 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       p.set("pthr", String(potThreshPct));
     }
     if (potSepGap !== 7) p.set("pgap", String(potSepGap));
+    if (siteAreaStr) p.set("ta", siteAreaStr);
+    if (transferExp !== DEFAULT_TRANSFER_EXPONENT) p.set("tn", String(transferExp));
 
     const qs  = p.toString();
     const url = qs ? `${pathname}?${qs}` : pathname;
     if (`${window.location.pathname}${window.location.search}` !== url)
       window.history.replaceState(null, "", url);
   }, [tab, options, yearRange, peaksYearRange, excludedYears,
-      potManualMode, potManualVal, potThreshPct, potSepGap, pathname]);
+      potManualMode, potManualVal, potThreshPct, potSepGap,
+      siteAreaStr, transferExp, pathname]);
 
   // ── Derived peaks lists ───────────────────────────────────────────────────
   const peaksInRange = useMemo<PeakPoint[]>(() => {
@@ -635,7 +687,8 @@ export function FrequencyView({ stationId }: { stationId: string }) {
                      : t === "table" ? "Design Floods"
                      : t === "gof"   ? "Goodness of Fit"
                      : t === "trend" ? "Trend Analysis"
-                     : /* pot */       `POT${potResult ? ` (${potResult.peaks.length})` : ""}`}
+                     : t === "pot"   ? `POT${potResult ? ` (${potResult.peaks.length})` : ""}`
+                     : /* transfer */  "Ungauged Transfer"}
                   </button>
                 ))}
                 {/* Download + Print Report */}
@@ -1256,6 +1309,235 @@ export function FrequencyView({ stationId }: { stationId: string }) {
                               ξ = {potResult.params.shape.toFixed(4)} ·{" "}
                               σ = {potResult.params.scale.toFixed(2)} m³/s ·{" "}
                               u = {potResult.params.threshold.toFixed(1)} m³/s
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── Ungauged Transfer tab ── */}
+              {tab === "transfer" && (
+                <div className="space-y-6">
+                  {transferLoading && (
+                    <div className="flex items-center justify-center h-24 text-gray-400 text-sm">
+                      Loading station catalog…
+                    </div>
+                  )}
+                  {transferError && (
+                    <Callout level="error">Station data error: {transferError}</Callout>
+                  )}
+
+                  {station && (
+                    <>
+                      {/* Controls */}
+                      <div className="bg-gray-50 border border-gray-200 rounded p-4">
+                        <div className="flex flex-wrap gap-6 items-end">
+                          <div>
+                            <p className="text-xs font-medium text-gray-600 mb-1.5">Donor station</p>
+                            <p className="text-sm font-medium text-gray-800">
+                              {station.station_number} — {station.name}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Drainage area:{" "}
+                              {donorArea !== null
+                                ? `${donorArea.toLocaleString()} km²`
+                                : "not published"}
+                              {station.regulated && " · regulated"}
+                            </p>
+                          </div>
+
+                          <div>
+                            <p className="text-xs font-medium text-gray-600 mb-1.5">
+                              Ungauged site area (km²)
+                            </p>
+                            <input type="number" min={0} step="any" value={siteAreaStr}
+                              onChange={(e) => setSiteAreaStr(e.target.value)}
+                              placeholder="e.g. 320"
+                              className="w-36 border border-gray-300 rounded px-2 py-1.5 text-sm" />
+                          </div>
+
+                          <div>
+                            <p className="text-xs font-medium text-gray-600 mb-1.5">
+                              Exponent n = {transferExp.toFixed(2)}
+                            </p>
+                            <input type="range" min={0.5} max={1.0} step={0.01}
+                              value={transferExp}
+                              onChange={(e) => setTransferExp(Number(e.target.value))}
+                              className="w-40" />
+                            {transferExp !== DEFAULT_TRANSFER_EXPONENT && (
+                              <button onClick={() => setTransferExp(DEFAULT_TRANSFER_EXPONENT)}
+                                className="block text-xs text-blue-600 hover:underline">
+                                Reset to 0.75
+                              </button>
+                            )}
+                          </div>
+
+                          {scaleFactor !== null && areaRatio !== null && (
+                            <div className="bg-white border border-gray-200 rounded px-3 py-2">
+                              <p className="text-xs text-gray-500">
+                                Area ratio {areaRatio.toFixed(3)} → scale factor
+                              </p>
+                              <p className="text-lg font-semibold text-blue-700">
+                                × {scaleFactor.toFixed(3)}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {donorArea === null && (
+                        <Callout level="error">
+                          This station has no published drainage area, so the area-ratio method
+                          cannot be applied from here. Pick a donor from the nearby stations below.
+                        </Callout>
+                      )}
+
+                      {station.regulated && scaleFactor !== null && (
+                        <Callout level="caution">
+                          The donor station is regulated. Transferred quantiles inherit the effects
+                          of regulation and may not represent natural flood response at the
+                          ungauged site.
+                        </Callout>
+                      )}
+
+                      {areaRatio !== null &&
+                        (areaRatio < AREA_RATIO_VALID_MIN || areaRatio > AREA_RATIO_VALID_MAX) && (
+                        <Callout level="caution">
+                          Area ratio {areaRatio.toFixed(2)} is outside the commonly accepted
+                          validity range ({AREA_RATIO_VALID_MIN}–{AREA_RATIO_VALID_MAX}× the donor
+                          area). Transferred estimates are unreliable — consider a similar-sized
+                          donor or a regional regression approach.
+                        </Callout>
+                      )}
+
+                      {/* Scaled design flood table */}
+                      {scaleFactor !== null && fitted.length > 0 && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                            Scaled Design Floods at Ungauged Site
+                            ({siteArea?.toLocaleString()} km²)
+                          </h3>
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm border border-gray-200 rounded text-right">
+                              <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+                                <tr>
+                                  <th className="px-4 py-2 text-left">Return Period (yr)</th>
+                                  <th className="px-4 py-2 text-left">AEP</th>
+                                  {fitted.map((d) => (
+                                    <th key={d.key} className="px-4 py-2"
+                                      style={{ color: DIST_COLORS[d.key] }}>
+                                      {d.key.toUpperCase()}{d.key === best ? " ★" : ""}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {options.return_periods.map((t) => (
+                                  <tr key={t} className={t >= 100 ? "bg-blue-50" : ""}>
+                                    <td className="px-4 py-2 text-left font-medium">{t}</td>
+                                    <td className="px-4 py-2 text-left text-gray-500">{fmtAep(t)}</td>
+                                    {fitted.map((d) => {
+                                      const q = d.quantiles.find((q) => q.return_period === t);
+                                      return (
+                                        <td key={d.key} className="px-4 py-2">
+                                          {q ? (
+                                            <span>
+                                              <span className="font-mono font-medium">
+                                                {fmtDischarge(q.value * scaleFactor)}
+                                              </span>
+                                              {q.ci_lower !== null && (
+                                                <span className="block text-xs text-gray-400">
+                                                  [{fmtDischarge(q.ci_lower * scaleFactor)}–
+                                                  {fmtDischarge((q.ci_upper ?? 0) * scaleFactor)}]
+                                                </span>
+                                              )}
+                                            </span>
+                                          ) : "—"}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <p className="text-xs text-gray-400 mt-2">
+                              Q_site = Q_donor × ({siteArea?.toLocaleString()} / {donorArea?.toLocaleString()})^
+                              {transferExp.toFixed(2)} = Q_donor × {scaleFactor.toFixed(3)}.
+                              Values in m³/s. CIs are the donor's bootstrap intervals scaled by the
+                              same factor — they exclude transfer-method uncertainty. ★ = best fit by AIC.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {scaleFactor === null && donorArea !== null && (
+                        <Callout level="info">
+                          Enter your ungauged site's drainage area above to scale this station's
+                          design floods.
+                        </Callout>
+                      )}
+
+                      {/* Nearby alternative donors */}
+                      {nearbyDonors && nearbyDonors.length > 0 && (
+                        <div>
+                          <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                            Alternative Donor Stations Nearby
+                          </h3>
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm border border-gray-200 rounded">
+                              <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+                                <tr>
+                                  <th className="px-4 py-2 text-left">Station</th>
+                                  <th className="px-4 py-2 text-left">Name</th>
+                                  <th className="px-4 py-2 text-right">Distance (km)</th>
+                                  <th className="px-4 py-2 text-right">Area (km²)</th>
+                                  <th className="px-4 py-2 text-right">Ratio to site</th>
+                                  <th className="px-4 py-2 text-center">Use</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {nearbyDonors.map(({ station: d, distanceKm }) => {
+                                  const dArea = d.drainage_area_gross_km2!;
+                                  const ratio = siteArea !== null ? siteArea / dArea : null;
+                                  const inRange = ratio !== null &&
+                                    ratio >= AREA_RATIO_VALID_MIN && ratio <= AREA_RATIO_VALID_MAX;
+                                  const href = `/stations/${d.station_number}/frequency?tab=transfer` +
+                                    (siteAreaStr ? `&ta=${encodeURIComponent(siteAreaStr)}` : "") +
+                                    (transferExp !== DEFAULT_TRANSFER_EXPONENT ? `&tn=${transferExp}` : "");
+                                  return (
+                                    <tr key={d.station_number}>
+                                      <td className="px-4 py-2 font-mono text-xs">{d.station_number}</td>
+                                      <td className="px-4 py-2">
+                                        {d.name}
+                                        {d.regulated && (
+                                          <span className="ml-1.5 text-xs text-amber-600">(regulated)</span>
+                                        )}
+                                      </td>
+                                      <td className="px-4 py-2 text-right font-mono">{distanceKm.toFixed(0)}</td>
+                                      <td className="px-4 py-2 text-right font-mono">{dArea.toLocaleString()}</td>
+                                      <td className={`px-4 py-2 text-right font-mono ${
+                                        ratio === null ? "text-gray-400"
+                                        : inRange ? "text-green-700" : "text-amber-600"}`}>
+                                        {ratio !== null ? ratio.toFixed(2) : "—"}
+                                      </td>
+                                      <td className="px-4 py-2 text-center">
+                                        <a href={href}
+                                          className="text-xs text-blue-600 hover:underline">
+                                          Open as donor →
+                                        </a>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                            <p className="text-xs text-gray-400 mt-2">
+                              Distance from the donor gauge, not from your site. Green ratio =
+                              within the {AREA_RATIO_VALID_MIN}–{AREA_RATIO_VALID_MAX}× validity
+                              range. Links carry your site area into the next station's transfer tab.
                             </p>
                           </div>
                         </div>

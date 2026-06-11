@@ -31,7 +31,8 @@ export type MethodologyKey =
   | "table"
   | "gof"
   | "trend"
-  | "pot";
+  | "pot"
+  | "transfer";
 
 export const METHODOLOGY: Record<MethodologyKey, MethodologyEntry> = {
 
@@ -200,6 +201,20 @@ export const METHODOLOGY: Record<MethodologyKey, MethodologyEntry> = {
       { text: "Hosking, J.R.M. & Wallis, J.R. (1987). Parameter and quantile estimation for the generalized Pareto distribution. Technometrics, 29(3), 339–349.", url: "https://doi.org/10.2307/1269343" },
       { text: "Coles, S. (2001). An Introduction to Statistical Modeling of Extreme Values. Springer, London.", url: "https://doi.org/10.1007/978-1-4471-3675-0" },
       { text: "Madsen, H., Rasmussen, P.F. & Rosbjerg, D. (1997). Comparison of annual maximum series and partial duration series methods for modeling extreme hydrologic events. Water Resour. Res., 33(4), 747–757.", url: "https://doi.org/10.1029/96WR03848" },
+    ],
+  },
+
+  transfer: {
+    title: "Area-Ratio Transfer to Ungauged Sites",
+    paragraphs: [
+      "Most project sites are not at a gauged location. The area-ratio (drainage-area scaling) method transfers flood quantiles from a gauged donor station to an ungauged site on the assumption that flood magnitude scales with contributing drainage area: Q_site = Q_donor × (A_site / A_donor)^n. The exponent n reflects how flood-producing mechanisms attenuate with basin size — values for Canadian basins typically fall between 0.6 and 0.9, with 0.75 a common default where no regional study exists. Where a provincial or regional flood-frequency study publishes a calibrated exponent, that value should be preferred.",
+      "The method is most defensible when the donor and the ungauged site are on the same stream or in hydrologically similar adjacent basins, with comparable physiography, land cover, and climate. Reliability degrades quickly as the area ratio departs from unity; a commonly cited validity range is roughly 0.2 to 5 times the donor's drainage area. Outside that range — or where the donor is regulated, or the basins differ in lake storage or urbanisation — a regional regression or rainfall-runoff modelling approach is more appropriate.",
+      "Confidence intervals shown alongside the scaled quantiles are the donor station's bootstrap intervals multiplied by the same scale factor. They therefore capture only the statistical uncertainty of the donor fit — not the (often larger) uncertainty introduced by the transfer assumption itself. Scaled estimates should be treated as preliminary planning values and verified with an independent method before final design.",
+    ],
+    references: [
+      { text: "Watt, W.E. (ed.) (1989). Hydrology of Floods in Canada: A Guide to Planning and Design. National Research Council of Canada, Ottawa." },
+      { text: "Gingras, D. & Adamowski, K. (1993). Homogeneous region delineation based on annual flood generation mechanisms. Hydrol. Sci. J., 38(2), 103–121.", url: "https://doi.org/10.1080/02626669309492649" },
+      { text: "Emerson, D.G., Vecchia, A.V. & Dahl, A.L. (2005). Evaluation of drainage-area ratio method used to estimate streamflow for the Red River of the North Basin. USGS Scientific Investigations Report 2005-5017.", url: "https://doi.org/10.3133/sir20055017" },
     ],
   },
 };
