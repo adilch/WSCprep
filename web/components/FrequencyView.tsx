@@ -10,6 +10,10 @@ import {
   transferScaleFactor, findNearbyDonors, DEFAULT_TRANSFER_EXPONENT,
   AREA_RATIO_VALID_MIN, AREA_RATIO_VALID_MAX,
 } from "@/lib/transfer";
+import {
+  REGRESSION_PARAMS, computeYValue, fitPowerLaw, predictPowerLaw, predictionRange,
+} from "@/lib/regression";
+import type { RegressionParam, StationFlowData } from "@/lib/regression";
 import { fmtDischarge, fmtAep } from "@/lib/format";
 import { strings } from "@/lib/strings";
 import { Callout } from "./Callout";
@@ -41,7 +45,9 @@ const fmt = (v: number | null | undefined, dp: number): string =>
   v == null || !isFinite(v) ? "—" : v.toFixed(dp);
 
 const DEFAULT_RETURN_PERIODS = [2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000];
-const VALID_TABS = ["peaks", "freq", "table", "gof", "trend", "pot", "transfer"] as const;
+const VALID_TABS = ["peaks", "freq", "table", "gof", "trend", "pot", "transfer", "regression"] as const;
+
+const REG_MAX_GAUGES = 15;
 type FfaTab = (typeof VALID_TABS)[number];
 
 export function FrequencyView({ stationId }: { stationId: string }) {
@@ -162,6 +168,27 @@ export function FrequencyView({ stationId }: { stationId: string }) {
     return v >= 0.3 && v <= 1.2 ? v : DEFAULT_TRANSFER_EXPONENT;
   });
 
+  // ── Regional regression state ─────────────────────────────────────────────
+  const [regSelected, setRegSelected] = useState<string[]>(() => {
+    const rg = searchParams.get("rg");
+    if (rg) {
+      const ids = [...new Set(rg.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))];
+      if (ids.length) return ids.slice(0, REG_MAX_GAUGES);
+    }
+    return [stationId.toUpperCase()];
+  });
+  const [regParam, setRegParam] = useState<RegressionParam>(() => {
+    const ry = searchParams.get("ry");
+    return ry && ry in REGRESSION_PARAMS ? (ry as RegressionParam) : "meanPeak";
+  });
+  const [regPredictArea, setRegPredictArea] = useState(() => searchParams.get("ra") ?? "");
+  const [regExclRegulated, setRegExclRegulated] = useState(true);
+  const [regAddInput,  setRegAddInput]  = useState("");
+  const [regAddError,  setRegAddError]  = useState<string | null>(null);
+  /** Fetched flow data per station; error blocks refetch for the session. */
+  const [regData, setRegData] = useState<Record<string, StationFlowData & { error?: string }>>({});
+  const regFetching = useRef(new Set<string>());
+
   // ── Fetch peaks on mount ──────────────────────────────────────────────────
   useEffect(() => {
     async function loadPeaks() {
@@ -189,9 +216,9 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       .finally(() => setDailyLoading(false));
   }, [tab, stationId, dailySeries, dailyLoading]);
 
-  // ── Lazy-fetch station metadata + catalog when Transfer tab is visited ────
+  // ── Lazy-fetch station metadata + catalog (Transfer & Regression tabs) ────
   useEffect(() => {
-    if (tab !== "transfer" || (station && catalog) || transferLoading) return;
+    if ((tab !== "transfer" && tab !== "regression") || (station && catalog) || transferLoading) return;
     setTransferLoading(true);
     setTransferError(null);
     Promise.all([
@@ -222,6 +249,100 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       catalog, station.latitude, station.longitude, station.station_number, 8);
   }, [catalog, station]);
 
+  // ── Regression: fetch flow data for selected gauges ───────────────────────
+  useEffect(() => {
+    if (tab !== "regression") return;
+    const needs = REGRESSION_PARAMS[regParam].needs;
+    regSelected.forEach((id) => {
+      const have = regData[id];
+      if (have?.error) return;
+      if (needs === "peaks" ? have?.peaks : have?.daily) return;
+      const key = `${id}:${needs}`;
+      if (regFetching.current.has(key)) return;
+      regFetching.current.add(key);
+      const url = needs === "peaks"
+        ? `/api/stations/${id}/peaks`
+        : `/api/stations/${id}/daily?variable=discharge`;
+      fetch(url)
+        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then((d) => setRegData((m) => ({
+          ...m,
+          [id]: needs === "peaks"
+            ? { ...m[id], peaks: d.peaks }
+            : { ...m[id], daily: d.series },
+        })))
+        .catch((e) => setRegData((m) => ({
+          ...m,
+          [id]: { ...m[id], error: e instanceof Error ? e.message : "fetch failed" },
+        })))
+        .finally(() => regFetching.current.delete(key));
+    });
+  }, [tab, regParam, regSelected, regData]);
+
+  // ── Regression: derived points + fit ──────────────────────────────────────
+  const catalogById = useMemo(() => {
+    if (!catalog) return null;
+    return new Map(catalog.map((s) => [s.station_number, s]));
+  }, [catalog]);
+
+  const regPoints = useMemo(() => {
+    if (!catalogById) return null;
+    const needs = REGRESSION_PARAMS[regParam].needs;
+    return regSelected.map((id) => {
+      const st   = catalogById.get(id) ?? null;
+      const data = regData[id];
+      const area = st?.drainage_area_gross_km2 ?? null;
+      let y: number | null = null;
+      let status: "ok" | "loading" | "error" | "noArea" | "noY";
+      if (!st)                            status = "error";
+      else if (area === null || area <= 0) status = "noArea";
+      else if (data?.error)               status = "error";
+      else if (needs === "peaks" ? data?.peaks : data?.daily) {
+        y = computeYValue(regParam, data, area);
+        status = y !== null && y > 0 ? "ok" : "noY";
+      } else                              status = "loading";
+      return { id, st, area, y, status };
+    });
+  }, [catalogById, regSelected, regData, regParam]);
+
+  const regFit = useMemo(() => {
+    if (!regPoints) return null;
+    const pts = regPoints
+      .filter((p) => p.status === "ok" && !(regExclRegulated && p.st?.regulated))
+      .map((p) => ({ x: p.area as number, y: p.y as number }));
+    return fitPowerLaw(pts);
+  }, [regPoints, regExclRegulated]);
+
+  const regPredArea = useMemo(() => {
+    const v = parseFloat(regPredictArea);
+    return isFinite(v) && v > 0 ? v : null;
+  }, [regPredictArea]);
+
+  // Nearby gauges not yet in the set, for the picker sidebar.
+  const regNearby = useMemo(() => {
+    if (!catalog || !station) return null;
+    return findNearbyDonors(
+      catalog, station.latitude, station.longitude, station.station_number, 40)
+      .filter((d) => !regSelected.includes(d.station.station_number))
+      .slice(0, 12);
+  }, [catalog, station, regSelected]);
+
+  const addRegStation = (raw: string) => {
+    const id = raw.trim().toUpperCase();
+    setRegAddError(null);
+    if (!id) return;
+    if (regSelected.includes(id))            { setRegAddError(`${id} is already in the set.`); return; }
+    if (regSelected.length >= REG_MAX_GAUGES) { setRegAddError(`Maximum ${REG_MAX_GAUGES} gauges.`); return; }
+    const st = catalogById?.get(id);
+    if (!st)                          { setRegAddError(`Station ${id} not found.`); return; }
+    if (!st.drainage_area_gross_km2)  { setRegAddError(`${id} has no published drainage area.`); return; }
+    setRegSelected((s) => [...s, id]);
+    setRegAddInput("");
+  };
+
+  const removeRegStation = (id: string) =>
+    setRegSelected((s) => s.filter((x) => x !== id));
+
   // ── URL sync — full analysis state, defaults omitted for clean URLs ──────
   // Uses history.replaceState (integrates with the Next router) so slider
   // moves don't trigger server round-trips.
@@ -247,6 +368,10 @@ export function FrequencyView({ stationId }: { stationId: string }) {
     if (potSepGap !== 7) p.set("pgap", String(potSepGap));
     if (siteAreaStr) p.set("ta", siteAreaStr);
     if (transferExp !== DEFAULT_TRANSFER_EXPONENT) p.set("tn", String(transferExp));
+    if (regSelected.length !== 1 || regSelected[0] !== stationId.toUpperCase())
+      p.set("rg", regSelected.join(","));
+    if (regParam !== "meanPeak") p.set("ry", regParam);
+    if (regPredictArea) p.set("ra", regPredictArea);
 
     const qs  = p.toString();
     const url = qs ? `${pathname}?${qs}` : pathname;
@@ -254,7 +379,8 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       window.history.replaceState(null, "", url);
   }, [tab, options, yearRange, peaksYearRange, excludedYears,
       potManualMode, potManualVal, potThreshPct, potSepGap,
-      siteAreaStr, transferExp, pathname]);
+      siteAreaStr, transferExp, regSelected, regParam, regPredictArea,
+      stationId, pathname]);
 
   // ── Derived peaks lists ───────────────────────────────────────────────────
   const peaksInRange = useMemo<PeakPoint[]>(() => {
@@ -688,7 +814,8 @@ export function FrequencyView({ stationId }: { stationId: string }) {
                      : t === "gof"   ? "Goodness of Fit"
                      : t === "trend" ? "Trend Analysis"
                      : t === "pot"   ? `POT${potResult ? ` (${potResult.peaks.length})` : ""}`
-                     : /* transfer */  "Ungauged Transfer"}
+                     : t === "transfer" ? "Ungauged Transfer"
+                     : /* regression */  `Regression (${regSelected.length})`}
                   </button>
                 ))}
                 {/* Download + Print Report */}
@@ -1543,6 +1670,309 @@ export function FrequencyView({ stationId }: { stationId: string }) {
                         </div>
                       )}
                     </>
+                  )}
+                </div>
+              )}
+
+              {/* ── Regional Regression tab ── */}
+              {tab === "regression" && (
+                <div className="space-y-6">
+                  {transferLoading && (
+                    <div className="flex items-center justify-center h-24 text-gray-400 text-sm">
+                      Loading station catalog…
+                    </div>
+                  )}
+                  {transferError && (
+                    <Callout level="error">Station data error: {transferError}</Callout>
+                  )}
+
+                  {station && regPoints && (
+                    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-6 space-y-6 lg:space-y-0">
+
+                      {/* ── Main column ── */}
+                      <div className="space-y-5 min-w-0">
+
+                        {/* Controls */}
+                        <div className="bg-gray-50 border border-gray-200 rounded p-4">
+                          <div className="flex flex-wrap gap-5 items-end">
+                            <div>
+                              <p className="text-xs font-medium text-gray-600 mb-1.5">
+                                Y-axis parameter (X = gross drainage area)
+                              </p>
+                              <select value={regParam}
+                                onChange={(e) => setRegParam(e.target.value as RegressionParam)}
+                                className="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                                {(Object.keys(REGRESSION_PARAMS) as RegressionParam[]).map((k) => (
+                                  <option key={k} value={k}>
+                                    {REGRESSION_PARAMS[k].label} ({REGRESSION_PARAMS[k].unit})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-gray-600 pb-2">
+                              <input type="checkbox" checked={regExclRegulated}
+                                onChange={(e) => setRegExclRegulated(e.target.checked)} />
+                              Exclude regulated gauges from fit
+                            </label>
+                            {REGRESSION_PARAMS[regParam].needs === "daily" && (
+                              <p className="text-xs text-gray-400 pb-2">
+                                Daily-series parameters fetch the full record per gauge on first load.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Fit statistics */}
+                        {regFit ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                            <div className="col-span-2 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                              <p className="text-xs text-blue-500 uppercase tracking-wide">Fitted power law</p>
+                              <p className="font-semibold text-blue-900 mt-0.5 font-mono">
+                                Q = {regFit.coefficient.toPrecision(3)} · A^{regFit.slope.toFixed(3)}
+                              </p>
+                            </div>
+                            {[
+                              ["R²", regFit.r2.toFixed(3)],
+                              ["SE (log₁₀)", regFit.seLog.toFixed(3)],
+                            ].map(([label, value]) => (
+                              <div key={label} className="bg-gray-50 border border-gray-200 rounded px-3 py-2">
+                                <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
+                                <p className="font-semibold text-gray-800 mt-0.5">{value}</p>
+                              </div>
+                            ))}
+                            {(regParam === "meanPeak" || regParam === "medianPeak") &&
+                              regFit.slope >= 0.3 && regFit.slope <= 1.2 && (
+                              <div className="col-span-2 sm:col-span-4 text-xs text-gray-500">
+                                The exponent b = {regFit.slope.toFixed(2)} is the region-specific
+                                value of n for the area-ratio method.{" "}
+                                <button
+                                  onClick={() => {
+                                    setTransferExp(Math.min(1.0, Math.max(0.5, Number(regFit.slope.toFixed(2)))));
+                                    setTab("transfer");
+                                  }}
+                                  className="text-blue-600 hover:underline">
+                                  Use it on the Ungauged Transfer tab →
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <Callout level="info">
+                            Add gauges until at least 3 have valid data
+                            {regExclRegulated ? " (regulated gauges are excluded from the fit)" : ""} —
+                            use the panel on the right.
+                          </Callout>
+                        )}
+
+                        {/* Scatter + fit plot */}
+                        {(() => {
+                          const okPts = regPoints.filter((p) => p.status === "ok");
+                          if (okPts.length === 0) return null;
+                          const info = REGRESSION_PARAMS[regParam];
+                          const natural   = okPts.filter((p) => !p.st?.regulated);
+                          const regulated = okPts.filter((p) =>  p.st?.regulated);
+                          const hover = (p: typeof okPts[number]) =>
+                            `${p.id} — ${p.st!.name}<br>A = ${p.area!.toLocaleString()} km²<br>` +
+                            `${info.label} = ${p.y!.toPrecision(4)} ${info.unit}`;
+                          const xs = okPts.map((p) => p.area as number);
+                          const xMin = Math.min(...xs) * 0.6;
+                          const xMax = Math.max(...xs) * 1.6;
+                          return (
+                            <div className="bg-white border border-gray-200 rounded p-2">
+                              <Plot
+                                data={[
+                                  ...(natural.length ? [{
+                                    x: natural.map((p) => p.area as number),
+                                    y: natural.map((p) => p.y as number),
+                                    type: "scatter" as const, mode: "markers" as const,
+                                    marker: { color: "#2563eb", size: 9 },
+                                    text: natural.map(hover),
+                                    hoverinfo: "text" as const,
+                                    name: "Natural gauge",
+                                  }] : []),
+                                  ...(regulated.length ? [{
+                                    x: regulated.map((p) => p.area as number),
+                                    y: regulated.map((p) => p.y as number),
+                                    type: "scatter" as const, mode: "markers" as const,
+                                    marker: { color: "#d97706", size: 9, symbol: "diamond" },
+                                    text: regulated.map(hover),
+                                    hoverinfo: "text" as const,
+                                    name: "Regulated gauge",
+                                  }] : []),
+                                  ...(regFit ? [{
+                                    // Power law is a straight line in log-log — two points suffice.
+                                    x: [xMin, xMax],
+                                    y: [predictPowerLaw(regFit, xMin), predictPowerLaw(regFit, xMax)],
+                                    type: "scatter" as const, mode: "lines" as const,
+                                    line: { color: "#111827", width: 2 },
+                                    name: `Fit (R² = ${regFit.r2.toFixed(2)})`,
+                                  }] : []),
+                                  ...(regFit && regPredArea !== null ? [{
+                                    x: [regPredArea],
+                                    y: [predictPowerLaw(regFit, regPredArea)],
+                                    type: "scatter" as const, mode: "markers" as const,
+                                    marker: { color: "#16a34a", size: 13, symbol: "star" },
+                                    name: "Your site",
+                                  }] : []),
+                                ]}
+                                layout={{
+                                  title: { text: `${info.label} vs Drainage Area` },
+                                  xaxis: { title: { text: "Gross drainage area (km²)" }, type: "log" },
+                                  yaxis: { title: { text: `${info.label} (${info.unit})` }, type: "log" },
+                                  height: 460,
+                                  margin: { l: 70, r: 20, t: 50, b: 80 },
+                                  legend: { orientation: "h", y: -0.2 },
+                                }}
+                                config={{ responsive: true,
+                                  toImageButtonOptions: { format: "png", filename: `${stationId}_regression` } }}
+                                style={{ width: "100%" }}
+                              />
+                            </div>
+                          );
+                        })()}
+
+                        {/* Prediction at ungauged area */}
+                        <div className="bg-gray-50 border border-gray-200 rounded p-4 flex flex-wrap items-end gap-5">
+                          <div>
+                            <p className="text-xs font-medium text-gray-600 mb-1.5">
+                              Estimate at drainage area (km²)
+                            </p>
+                            <input type="number" min={0} step="any" value={regPredictArea}
+                              onChange={(e) => setRegPredictArea(e.target.value)}
+                              placeholder="e.g. 320"
+                              className="w-36 border border-gray-300 rounded px-2 py-1.5 text-sm" />
+                          </div>
+                          {regFit && regPredArea !== null && (() => {
+                            const pred  = predictPowerLaw(regFit, regPredArea);
+                            const range = predictionRange(regFit, regPredArea);
+                            const info  = REGRESSION_PARAMS[regParam];
+                            return (
+                              <div className="bg-white border border-gray-200 rounded px-3 py-2">
+                                <p className="text-xs text-gray-500">
+                                  {info.label} at {regPredArea.toLocaleString()} km²
+                                </p>
+                                <p className="text-lg font-semibold text-green-700">
+                                  {pred.toPrecision(4)} {info.unit}
+                                  <span className="ml-2 text-xs font-normal text-gray-400">
+                                    ~95% range {range.low.toPrecision(3)}–{range.high.toPrecision(3)}
+                                  </span>
+                                </p>
+                              </div>
+                            );
+                          })()}
+                          {!regFit && regPredArea !== null && (
+                            <p className="text-xs text-gray-400 pb-2">Fit needs at least 3 valid gauges.</p>
+                          )}
+                        </div>
+
+                        {/* Selected gauges */}
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-sm border border-gray-200 rounded">
+                            <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Station</th>
+                                <th className="px-3 py-2 text-left">Name</th>
+                                <th className="px-3 py-2 text-right">Area (km²)</th>
+                                <th className="px-3 py-2 text-right">{REGRESSION_PARAMS[regParam].label}</th>
+                                <th className="px-3 py-2 text-center w-10"></th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {regPoints.map((p) => (
+                                <tr key={p.id}
+                                  className={p.status === "ok" && regExclRegulated && p.st?.regulated ? "opacity-60" : ""}>
+                                  <td className="px-3 py-1.5 font-mono text-xs">
+                                    {p.id}
+                                    {p.id === stationId.toUpperCase() && (
+                                      <span className="ml-1 text-blue-500" title="Current station">●</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-1.5">
+                                    {p.st?.name ?? "—"}
+                                    {p.st?.regulated && (
+                                      <span className="ml-1.5 text-xs text-amber-600">
+                                        (regulated{regExclRegulated ? ", not in fit" : ""})
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-mono">
+                                    {p.area !== null ? p.area.toLocaleString() : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-mono">
+                                    {p.status === "ok"      ? `${(p.y as number).toPrecision(4)}`
+                                     : p.status === "loading" ? <span className="text-gray-400 text-xs">loading…</span>
+                                     : p.status === "noArea"  ? <span className="text-red-500 text-xs">no area</span>
+                                     : p.status === "noY"     ? <span className="text-amber-600 text-xs">no data</span>
+                                     : <span className="text-red-500 text-xs">error</span>}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-center">
+                                    <button onClick={() => removeRegStation(p.id)}
+                                      className="text-gray-400 hover:text-red-600" title="Remove">
+                                      ✕
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* ── Gauge picker sidebar ── */}
+                      <div className="space-y-4">
+                        <div className="bg-gray-50 border border-gray-200 rounded p-3">
+                          <p className="text-xs font-medium text-gray-600 mb-2">
+                            Add gauge by number ({regSelected.length}/{REG_MAX_GAUGES})
+                          </p>
+                          <div className="flex gap-2">
+                            <input type="text" value={regAddInput}
+                              onChange={(e) => { setRegAddInput(e.target.value); setRegAddError(null); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") addRegStation(regAddInput); }}
+                              placeholder="e.g. 05BB001"
+                              className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono uppercase" />
+                            <button onClick={() => addRegStation(regAddInput)}
+                              disabled={regSelected.length >= REG_MAX_GAUGES}
+                              className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50">
+                              Add
+                            </button>
+                          </div>
+                          {regAddError && (
+                            <p className="text-xs text-red-600 mt-1.5">{regAddError}</p>
+                          )}
+                        </div>
+
+                        {regNearby && regNearby.length > 0 && (
+                          <div className="bg-white border border-gray-200 rounded p-3">
+                            <p className="text-xs font-medium text-gray-600 mb-2">
+                              Nearby gauges (distance from {station.station_number})
+                            </p>
+                            <ul className="space-y-1.5">
+                              {regNearby.map(({ station: d, distanceKm }) => (
+                                <li key={d.station_number}
+                                  className="flex items-center justify-between gap-2 text-xs">
+                                  <div className="min-w-0">
+                                    <p className="font-mono text-gray-700">
+                                      {d.station_number}
+                                      <span className="ml-1.5 font-sans text-gray-400">
+                                        {distanceKm.toFixed(0)} km · {d.drainage_area_gross_km2!.toLocaleString()} km²
+                                        {d.regulated ? " · reg." : ""}
+                                      </span>
+                                    </p>
+                                    <p className="text-gray-500 truncate">{d.name}</p>
+                                  </div>
+                                  <button onClick={() => addRegStation(d.station_number)}
+                                    disabled={regSelected.length >= REG_MAX_GAUGES}
+                                    className="shrink-0 border border-blue-300 text-blue-600 rounded px-2 py-0.5 hover:bg-blue-50 disabled:opacity-40"
+                                    title="Add to regression">
+                                    + Add
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}

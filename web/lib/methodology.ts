@@ -32,7 +32,8 @@ export type MethodologyKey =
   | "gof"
   | "trend"
   | "pot"
-  | "transfer";
+  | "transfer"
+  | "regression";
 
 export const METHODOLOGY: Record<MethodologyKey, MethodologyEntry> = {
 
@@ -215,6 +216,20 @@ export const METHODOLOGY: Record<MethodologyKey, MethodologyEntry> = {
       { text: "Watt, W.E. (ed.) (1989). Hydrology of Floods in Canada: A Guide to Planning and Design. National Research Council of Canada, Ottawa." },
       { text: "Gingras, D. & Adamowski, K. (1993). Homogeneous region delineation based on annual flood generation mechanisms. Hydrol. Sci. J., 38(2), 103–121.", url: "https://doi.org/10.1080/02626669309492649" },
       { text: "Emerson, D.G., Vecchia, A.V. & Dahl, A.L. (2005). Evaluation of drainage-area ratio method used to estimate streamflow for the Red River of the North Basin. USGS Scientific Investigations Report 2005-5017.", url: "https://doi.org/10.3133/sir20055017" },
+    ],
+  },
+
+  regression: {
+    title: "Regional Regression Against Drainage Area",
+    paragraphs: [
+      "Regional regression generalises the single-donor transfer idea: instead of scaling from one gauge, a flow parameter is regressed against drainage area across a group of hydrologically similar gauges. The fit is ordinary least squares in log–log space, giving a power law Q = a·Aᵇ — the same functional form used in provincial flood-estimation manuals and USGS regional regression equations. The scatter of the gauges about the fitted line is itself diagnostic: a tight fit (high R², low standard error) indicates a hydrologically homogeneous region where area explains most of the variability; a loose fit warns that other basin characteristics (lakes, urbanisation, climate gradients) matter and area-only estimates are unreliable.",
+      "Gauge selection drives the quality of the regression. Stations should share flood-producing mechanisms and physiography with the site of interest — nearby is a useful first filter but not sufficient. Regulated stations are flagged and excluded from the fit by default, because storage operations suppress natural peaks and bias the relationship. At least three gauges are required to fit; five to ten spanning the drainage-area range of interest is a practical minimum for stable estimates.",
+      "The fitted exponent b is directly transferable: it is the same exponent n used by the area-ratio method on the Ungauged Transfer tab, so a regression built from local gauges provides a defensible, site-specific replacement for the default n = 0.75. The prediction band shown is a multiplicative interval from the standard error of estimate and ignores leverage effects, so it understates uncertainty near the edges of the fitted area range. Estimates for sites outside the gauged area range are extrapolations and should be verified with an independent method.",
+    ],
+    references: [
+      { text: "Watt, W.E. (ed.) (1989). Hydrology of Floods in Canada: A Guide to Planning and Design. National Research Council of Canada, Ottawa." },
+      { text: "Eng, K., Chen, Y.-Y. & Kiang, J.E. (2009). User's guide to the weighted-multiple-linear-regression program (WREG version 1.0). USGS Techniques and Methods 4-A8.", url: "https://doi.org/10.3133/tm4A8" },
+      { text: "Pandey, G.R. & Nguyen, V.T.V. (1999). A comparative study of regression based methods in regional flood frequency analysis. J. Hydrol., 225(1-2), 92–101.", url: "https://doi.org/10.1016/S0022-1694(99)00135-3" },
     ],
   },
 };
