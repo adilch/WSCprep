@@ -14,7 +14,12 @@ function loadCatalog() {
 export async function GET() {
   try {
     const stations = loadCatalog();
-    return NextResponse.json(stations);
+    return NextResponse.json(stations, {
+      headers: {
+        // Catalog is bundled at build time — cache hard, refresh weekly.
+        "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800",
+      },
+    });
   } catch {
     return NextResponse.json({ error: "Station catalog not found" }, { status: 500 });
   }

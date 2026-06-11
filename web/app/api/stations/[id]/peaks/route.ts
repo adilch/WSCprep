@@ -36,6 +36,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       peak_code: "max",
       unit: "m3/s",
       peaks,
+    }, {
+      headers: {
+        // Annual peak series changes at most a few times a year.
+        "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800",
+      },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

@@ -34,6 +34,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         start: values[0] ?? null,
         end: values[values.length - 1] ?? null,
       },
+    }, {
+      headers: {
+        // HYDAT daily data updates at most once a day — let the CDN absorb
+        // repeat traffic and serve stale while revalidating in the background.
+        "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+      },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

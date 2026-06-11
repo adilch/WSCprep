@@ -18,7 +18,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const stations = loadCatalog();
     const station = stations.find((s) => s.station_number === id.toUpperCase());
     if (!station) return NextResponse.json({ error: "Station not found" }, { status: 404 });
-    return NextResponse.json(station);
+    return NextResponse.json(station, {
+      headers: {
+        // Catalog is bundled at build time — cache hard, refresh weekly.
+        "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800",
+      },
+    });
   } catch {
     return NextResponse.json({ error: "Station catalog not found" }, { status: 500 });
   }
