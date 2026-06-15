@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import type { Station, CatalogMeta } from "@/lib/types";
@@ -103,19 +103,25 @@ export function MapPage({ stations, meta }: { stations: Station[]; meta: Catalog
   }, [stations, colorBy]);
 
   // ── Feature 13: favourites ──────────────────────────────────────────────
-  const [favourites, setFavourites] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set<string>();
-    try {
-      const raw = localStorage.getItem("wsc-fav");
-      return raw ? new Set<string>(JSON.parse(raw) as string[]) : new Set<string>();
-    } catch {
-      return new Set<string>();
-    }
-  });
+  // Start empty on both server and client so SSR output matches the first
+  // client render, then load the saved set after mount (see the
+  // "preventing-flash-before-hydration" guide in next/dist/docs).
+  const [favourites, setFavourites] = useState<Set<string>>(new Set());
+  const favouritesLoaded = useRef(false);
   const [showFavOnly, setShowFavOnly] = useState(false);
 
-  // Persist favourites to localStorage whenever they change.
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem("wsc-fav");
+      if (raw) setFavourites(new Set<string>(JSON.parse(raw) as string[]));
+    } catch {}
+  }, []);
+
+  // Persist favourites to localStorage whenever they change. Skip the mount
+  // run: it fires with the initial empty set, before the saved set above has
+  // been applied, and would erase it.
+  useEffect(() => {
+    if (!favouritesLoaded.current) { favouritesLoaded.current = true; return; }
     try { localStorage.setItem("wsc-fav", JSON.stringify([...favourites])); } catch {}
   }, [favourites]);
 
