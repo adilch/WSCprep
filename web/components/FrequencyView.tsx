@@ -44,7 +44,22 @@ const ALL_DISTRIBUTIONS = ["gev", "glo", "gumbel", "lp3", "pe3"];
 const fmt = (v: number | null | undefined, dp: number): string =>
   v == null || !isFinite(v) ? "—" : v.toFixed(dp);
 
-const DEFAULT_RETURN_PERIODS = [2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000];
+const BASE_RETURN_PERIODS = [2, 5, 10, 20, 25, 50, 100, 200, 500];
+/** Allowed upper bounds for the frequency analysis. */
+const MAX_RP_OPTIONS = [500, 1000, 10000] as const;
+type MaxRp = (typeof MAX_RP_OPTIONS)[number];
+
+/** Return periods to analyse for a given upper bound. */
+function returnPeriodsForMax(maxRp: MaxRp): number[] {
+  return [...BASE_RETURN_PERIODS, ...[1000, 10000].filter((t) => t <= maxRp)];
+}
+
+/** Parse the ?rp= URL param into a valid max return period (default 500). */
+function parseMaxRp(value: string | null): MaxRp {
+  const v = parseInt(value ?? "", 10);
+  return v === 1000 || v === 10000 ? v : 500;
+}
+
 const VALID_TABS = ["peaks", "freq", "table", "gof", "trend", "pot", "transfer", "regression"] as const;
 
 const REG_MAX_GAUGES = 15;
@@ -76,13 +91,25 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       estimation_method: est === "mom" ? "mom" : "lmoments",
       plotting_position:
         pp === "weibull" || pp === "gringorten" ? pp : "cunnane",
-      return_periods:    DEFAULT_RETURN_PERIODS,
+      return_periods:    returnPeriodsForMax(parseMaxRp(searchParams.get("rp"))),
       exclude_estimated: searchParams.get("inclEst") !== "1",
       confidence_level:  searchParams.get("cl") === "0.95" ? 0.95 : 0.9,
       ci_method:         "bootstrap",
       bootstrap_samples: 2000,
     };
   });
+
+  // Upper bound for return periods — drives both the table and the plot axis.
+  const [maxRp, setMaxRp] = useState<MaxRp>(() => parseMaxRp(searchParams.get("rp")));
+
+  // Keep the analysed return periods in sync with the selected upper bound.
+  // Changing this triggers runAnalysis via the options dependency.
+  useEffect(() => {
+    setOptions((o) => {
+      const next = returnPeriodsForMax(maxRp);
+      return next.length === o.return_periods.length ? o : { ...o, return_periods: next };
+    });
+  }, [maxRp]);
 
   // ── Annual peaks (fetched independently) ──────────────────────────────────
   const [peaks,     setPeaks]     = useState<PeakPoint[] | null>(null);
@@ -372,6 +399,7 @@ export function FrequencyView({ stationId }: { stationId: string }) {
       p.set("rg", regSelected.join(","));
     if (regParam !== "meanPeak") p.set("ry", regParam);
     if (regPredictArea) p.set("ra", regPredictArea);
+    if (maxRp !== 500) p.set("rp", String(maxRp));
 
     const qs  = p.toString();
     const url = qs ? `${pathname}?${qs}` : pathname;
@@ -380,7 +408,7 @@ export function FrequencyView({ stationId }: { stationId: string }) {
   }, [tab, options, yearRange, peaksYearRange, excludedYears,
       potManualMode, potManualVal, potThreshPct, potSepGap,
       siteAreaStr, transferExp, regSelected, regParam, regPredictArea,
-      stationId, pathname]);
+      maxRp, stationId, pathname]);
 
   // ── Derived peaks lists ───────────────────────────────────────────────────
   const peaksInRange = useMemo<PeakPoint[]>(() => {
@@ -569,6 +597,42 @@ export function FrequencyView({ stationId }: { stationId: string }) {
     !peaksYearRange || !yearRange ||
     (yearRange[0] === peaksYearRange[0] && yearRange[1] === peaksYearRange[1]);
 
+  // Frequency-plot x-axis ticks/range follow the selected max return period.
+  const freqAxis = useMemo(() => {
+    const ticks = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 10000].filter((t) => t <= maxRp);
+    return {
+      tickvals: ticks,
+      ticktext: ticks.map((t) => t.toLocaleString()),
+      range: [Math.log10(1.5), Math.log10(maxRp * 1.5)] as [number, number],
+    };
+  }, [maxRp]);
+
+  // Y-axis range from only the values inside the visible x-window, so the
+  // off-screen high-return-period quantiles don't stretch the plot.
+  const freqYRange = useMemo<[number, number] | undefined>(() => {
+    if (!result) return undefined;
+    const xMax = Math.pow(10, freqAxis.range[1]); // visible upper bound (years)
+    const ys: number[] = [];
+    result.plotting_positions.forEach((p) => {
+      if (p.return_period <= xMax) ys.push(p.value);
+    });
+    fitted.forEach((d) => d.curve.forEach((c) => {
+      if (c.return_period <= xMax) ys.push(c.value);
+    }));
+    if (best) {
+      fitted.find((d) => d.key === best)?.quantiles.forEach((q) => {
+        if (q.return_period > xMax) return;
+        if (q.ci_lower != null) ys.push(q.ci_lower);
+        if (q.ci_upper != null) ys.push(q.ci_upper);
+      });
+    }
+    if (!ys.length) return undefined;
+    const lo = Math.min(...ys);
+    const hi = Math.max(...ys);
+    const pad = (hi - lo) * 0.05 || hi * 0.05 || 1;
+    return [Math.max(0, lo - pad), hi + pad];
+  }, [result, fitted, best, freqAxis]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-screen-xl mx-auto px-4 py-6 space-y-6">
@@ -628,6 +692,21 @@ export function FrequencyView({ stationId }: { stationId: string }) {
               <option value={0.9}>90%</option>
               <option value={0.95}>95%</option>
             </select>
+          </div>
+
+          {/* Max return period */}
+          <div>
+            <p className="text-xs font-medium text-gray-600 mb-1.5">Max Return Period</p>
+            <div className="flex rounded border border-gray-300 overflow-hidden text-xs">
+              {MAX_RP_OPTIONS.map((rp) => (
+                <button key={rp} onClick={() => setMaxRp(rp)}
+                  className={`px-2.5 py-1 transition-colors border-l border-gray-300 first:border-l-0 ${
+                    maxRp === rp ? "bg-blue-600 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}>
+                  {rp.toLocaleString()}
+                </button>
+              ))}
+              <span className="px-1.5 py-1 bg-white text-gray-400 border-l border-gray-300">yr</span>
+            </div>
           </div>
 
           {/* Exclude estimated */}
@@ -958,10 +1037,11 @@ export function FrequencyView({ stationId }: { stationId: string }) {
                     layout={{
                       title: { text: strings.ffa.frequencyPlot },
                       xaxis: { title: { text: "Return Period (yr)" }, type: "log",
-                        tickvals: [2, 5, 10, 20, 50, 100, 200, 500, 1000, 10000],
-                        ticktext: ["2", "5", "10", "20", "50", "100", "200", "500", "1,000", "10,000"],
-                        range: [Math.log10(1.5), Math.log10(15000)] },
-                      yaxis: { title: { text: "Peak Discharge (m³/s)" } },
+                        tickvals: freqAxis.tickvals,
+                        ticktext: freqAxis.ticktext,
+                        range: freqAxis.range },
+                      yaxis: { title: { text: "Peak Discharge (m³/s)" },
+                        range: freqYRange, autorange: freqYRange ? false : true },
                       height: 480, legend: { orientation: "h", y: -0.25 },
                       margin: { l: 70, r: 20, t: 50, b: 100 },
                     }}
