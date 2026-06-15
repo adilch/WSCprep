@@ -65,6 +65,7 @@ export function HistoricDataView({ stationId }: { stationId: string }) {
   const [regimeBands, setRegimeBands] = useState({
     minMax: false, q10q90: true, q25q75: false, median: true,
   });
+  const [regimeYear, setRegimeYear] = useState<string>("");
   const [yearRange, setYearRange] = useState<[number, number] | null>(null);
 
   // ── Feature 16: Baseflow separation state ────────────────────────────────
@@ -526,6 +527,32 @@ export function HistoricDataView({ stationId }: { stationId: string }) {
           line: { color: "#2563eb", width: 2 }, name: "Mean",
         });
 
+        // Years available in the record (most recent first).
+        const availYears = Array.from(
+          new Set(series.filter((d) => d.value !== null).map((d) => d.date.slice(0, 4)))
+        ).sort((a, b) => b.localeCompare(a));
+
+        // Overlay a single selected year, mapped to day-of-year, in red.
+        if (regimeYear) {
+          const yearPts = series
+            .filter((d) => d.value !== null && d.date.slice(0, 4) === regimeYear)
+            .map((d) => {
+              const date = new Date(d.date + "T00:00:00");
+              const doy  = Math.floor(
+                (date.getTime() - new Date(date.getFullYear(), 0, 0).getTime()) / 86_400_000
+              );
+              return { doy, value: d.value as number };
+            })
+            .filter((p) => p.doy >= 1 && p.doy <= 366)
+            .sort((a, b) => a.doy - b.doy);
+          traces.push({
+            x: yearPts.map((p) => p.doy),
+            y: yearPts.map((p) => p.value),
+            type: "scatter", mode: "lines",
+            line: { color: "#dc2626", width: 2 }, name: `${regimeYear}`,
+          });
+        }
+
         const bandDefs = [
           { key: "minMax"  as const, label: "Min – Max",       color: "rgba(209,213,219,0.8)" },
           { key: "q10q90"  as const, label: "Q10 – Q90",       color: "rgba(147,197,253,0.8)" },
@@ -546,6 +573,15 @@ export function HistoricDataView({ stationId }: { stationId: string }) {
                   <span className="text-gray-700">{label}</span>
                 </label>
               ))}
+              <label className="flex items-center gap-1.5 cursor-pointer select-none border-l border-gray-200 pl-5">
+                <span className="inline-block w-3 h-3 rounded-sm bg-red-600 shrink-0" />
+                <span className="text-gray-700">Overlay year</span>
+                <select value={regimeYear} onChange={(e) => setRegimeYear(e.target.value)}
+                  className="border border-gray-300 rounded px-2 py-0.5 text-xs">
+                  <option value="">None</option>
+                  {availYears.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </label>
               <span className="ml-auto text-xs text-gray-400 italic">Mean always shown</span>
             </div>
             <div className="bg-white border border-gray-200 rounded p-2">
