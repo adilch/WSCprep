@@ -26,6 +26,72 @@ const DIST_COLORS: Record<string, string> = {
   gev: "#2563eb", gumbel: "#dc2626", lp3: "#9333ea",
 };
 
+// ── Selectable report sections ─────────────────────────────────────────────────
+type SectionId =
+  | "summary" | "hydrograph" | "fdc" | "regime"
+  | "peaks" | "design" | "annual" | "trend";
+
+const SECTION_INFO: Record<SectionId, { label: string; description: string }> = {
+  summary: {
+    label: "Summary statistics",
+    description:
+      "Key descriptive statistics summarising the full daily discharge record — central tendency, extremes, and data completeness.",
+  },
+  hydrograph: {
+    label: "Hydrograph",
+    description:
+      "The complete daily mean discharge time series over the period of record, revealing seasonal cycles, flood events, and low-flow periods at a glance.",
+  },
+  fdc: {
+    label: "Flow duration curve",
+    description:
+      "Ranks every daily discharge from highest to lowest to show the percentage of time each flow is equalled or exceeded. A steep curve indicates a flashy, rainfall-driven river; a flat curve indicates a well-buffered, groundwater- or lake-fed system.",
+  },
+  regime: {
+    label: "Annual regime",
+    description:
+      "Mean and median discharge for each day of the year, averaged across all years of record, with the Q10–Q90 band showing year-to-year variability. Reveals the seasonal flow signature — for example, the spring snowmelt freshet and summer recession.",
+  },
+  peaks: {
+    label: "Annual peaks & frequency curve",
+    description:
+      "Annual maximum peak discharges plotted by year, alongside the fitted flood frequency curve relating flood magnitude to return period. Points are empirical (plotting-position) estimates; lines are fitted probability distributions.",
+  },
+  design: {
+    label: "Design flood estimates",
+    description:
+      "Design flood magnitudes (quantiles) for standard return periods, fitted to the annual maximum series by the method of L-moments. The best-fitting distribution by the Akaike Information Criterion (AIC) is marked with a star.",
+  },
+  annual: {
+    label: "Annual statistics table",
+    description:
+      "Year-by-year summary: days of record, mean and maximum discharge (with date of maximum), minimum, and total annual runoff volume.",
+  },
+  trend: {
+    label: "Trend analysis",
+    description:
+      "The non-parametric Mann-Kendall test assesses whether annual peak flows exhibit a statistically significant monotonic trend, and Sen's slope estimates its magnitude. A significant trend indicates non-stationarity, which can undermine the assumptions of standard flood frequency analysis.",
+  },
+};
+
+const SECTION_ORDER: SectionId[] = [
+  "summary", "hydrograph", "fdc", "regime", "peaks", "design", "annual", "trend",
+];
+
+// Small heading + plain-language description shown atop each section.
+function SectionHeader({ id }: { id: SectionId }) {
+  return (
+    <>
+      <h2 className="text-base font-semibold text-gray-800 mb-1 border-b border-gray-200 pb-1">
+        {SECTION_INFO[id].label}
+      </h2>
+      <p className="text-xs text-gray-500 leading-relaxed mb-3">
+        {SECTION_INFO[id].description}
+      </p>
+    </>
+  );
+}
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface Props {
   stationId: string;
@@ -44,6 +110,17 @@ export function ReportView({ stationId, station }: Props) {
   const [ffaRes, setFfaRes] = useState<FrequencyResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
+
+  // Which sections to include — all on by default.
+  const [selected, setSelected] = useState<Set<SectionId>>(
+    () => new Set(SECTION_ORDER)
+  );
+  const toggleSection = (id: SectionId) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   // Fetch all data in parallel on mount
   useEffect(() => {
@@ -104,6 +181,22 @@ export function ReportView({ stationId, station }: Props) {
   const bestDist = ffaRes?.best_fit;
   const fittedDists = ffaRes?.distributions.filter((d) => !d.fit_error) ?? [];
   const bestDistData = fittedDists.find((d) => d.key === bestDist);
+
+  // Which sections actually have data to show.
+  const available = useMemo<Record<SectionId, boolean>>(() => ({
+    summary:    !!descStats,
+    hydrograph: !!daily && daily.length > 0,
+    fdc:        !!fdc && fdc.x.length > 0,
+    regime:     !!regime && regime.x.length > 0,
+    peaks:      !!peaksSorted && peaksSorted.length >= 5,
+    design:     !!ffaRes && !ffaRes.too_few_years && fittedDists.length > 0,
+    annual:     !!annStats && annStats.length > 0,
+    trend:      !!mkResult && !!peaksSorted,
+  }), [descStats, daily, fdc, regime, peaksSorted, ffaRes, fittedDists.length, annStats, mkResult]);
+
+  // A section renders only when both selected AND data-backed.
+  const show = (id: SectionId) => selected.has(id) && available[id];
+  const includedCount = SECTION_ORDER.filter(show).length;
 
   const senIntercept = useMemo(() => {
     if (!mkResult || !peaksSorted) return null;
@@ -221,8 +314,54 @@ export function ReportView({ stationId, station }: Props) {
 
         {!loading && !error && daily && (
           <>
+            {/* ── Report Builder (screen only) ────────────────────────────── */}
+            <div className="print-hide bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                <h2 className="text-sm font-semibold text-blue-900">
+                  Build your report — choose what to include
+                </h2>
+                <div className="flex items-center gap-3 text-xs">
+                  <button
+                    onClick={() => setSelected(new Set(SECTION_ORDER.filter((id) => available[id])))}
+                    className="text-blue-700 hover:underline">
+                    Select all
+                  </button>
+                  <button
+                    onClick={() => setSelected(new Set())}
+                    className="text-blue-700 hover:underline">
+                    Clear all
+                  </button>
+                  <span className="text-blue-500">·</span>
+                  <span className="text-blue-700 font-medium">
+                    {includedCount} section{includedCount !== 1 ? "s" : ""} selected
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5">
+                {SECTION_ORDER.map((id) => {
+                  const ok = available[id];
+                  return (
+                    <label key={id}
+                      className={`flex items-center gap-2 text-sm select-none ${
+                        ok ? "cursor-pointer text-gray-700" : "text-gray-400 cursor-not-allowed"}`}
+                      title={ok ? SECTION_INFO[id].description : "No data available for this station"}>
+                      <input type="checkbox" disabled={!ok}
+                        checked={ok && selected.has(id)}
+                        onChange={() => toggleSection(id)} />
+                      <span>{SECTION_INFO[id].label}{!ok && " (n/a)"}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {includedCount === 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  Select at least one section to include in the printed report.
+                </p>
+              )}
+            </div>
+
             {/* ── Descriptive stats strip ─────────────────────────────────── */}
-            {descStats && (
+            {show("summary") && descStats && (
               <div className="grid grid-cols-5 gap-3 text-sm">
                 {[
                   ["Mean Q", `${fmt(descStats.mean, 1)} m³/s`],
@@ -240,10 +379,9 @@ export function ReportView({ stationId, station }: Props) {
             )}
 
             {/* ── Section 2: Hydrograph ────────────────────────────────────── */}
+            {show("hydrograph") && (
             <div className="report-section">
-              <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                Hydrograph — Full Daily Record
-              </h2>
+              <SectionHeader id="hydrograph" />
               <div className="report-chart">
                 <Plot
                   data={[{
@@ -266,13 +404,12 @@ export function ReportView({ stationId, station }: Props) {
                 />
               </div>
             </div>
+            )}
 
             {/* ── Section 3: Flow Duration Curve ──────────────────────────── */}
-            {fdc && fdc.x.length > 0 && (
+            {show("fdc") && fdc && fdc.x.length > 0 && (
               <div className="report-section">
-                <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                  Flow Duration Curve
-                </h2>
+                <SectionHeader id="fdc" />
                 <div className="report-chart">
                   <Plot
                     data={[{
@@ -296,11 +433,9 @@ export function ReportView({ stationId, station }: Props) {
             )}
 
             {/* ── Section 4: Annual Regime ─────────────────────────────────── */}
-            {regime && regime.x.length > 0 && (
+            {show("regime") && regime && regime.x.length > 0 && (
               <div className="report-section">
-                <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                  Annual Regime (Day-of-Year Statistics)
-                </h2>
+                <SectionHeader id="regime" />
                 <div className="report-chart">
                   <Plot
                     data={[
@@ -340,11 +475,9 @@ export function ReportView({ stationId, station }: Props) {
             )}
 
             {/* ── Section 5: Annual Peaks + Frequency Curve ────────────────── */}
-            {peaksSorted && peaksSorted.length >= 5 && (
+            {show("peaks") && peaksSorted && peaksSorted.length >= 5 && (
               <div className="report-section">
-                <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                  Annual Maximum Peaks &amp; Flood Frequency Curve
-                </h2>
+                <SectionHeader id="peaks" />
                 <div className="grid grid-cols-2 gap-4">
                   {/* Annual peaks bar chart */}
                   <div className="report-chart">
@@ -412,11 +545,9 @@ export function ReportView({ stationId, station }: Props) {
             )}
 
             {/* ── Section 6: Design Flood Quantile Table ───────────────────── */}
-            {ffaRes && !ffaRes.too_few_years && fittedDists.length > 0 && (
+            {show("design") && ffaRes && !ffaRes.too_few_years && fittedDists.length > 0 && (
               <div className="report-section">
-                <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                  Design Flood Estimates
-                </h2>
+                <SectionHeader id="design" />
                 <table className="w-full text-sm border border-gray-200 rounded">
                   <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                     <tr>
@@ -457,11 +588,9 @@ export function ReportView({ stationId, station }: Props) {
             )}
 
             {/* ── Section 7: Annual Statistics Table ──────────────────────── */}
-            {annStats && annStats.length > 0 && (
+            {show("annual") && annStats && annStats.length > 0 && (
               <div className="report-section">
-                <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                  Annual Statistics
-                </h2>
+                <SectionHeader id="annual" />
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs border border-gray-200 rounded">
                     <thead className="bg-gray-50 text-gray-500 uppercase">
@@ -496,11 +625,9 @@ export function ReportView({ stationId, station }: Props) {
             )}
 
             {/* ── Section 8: Trend Analysis ────────────────────────────────── */}
-            {mkResult && peaksSorted && (
+            {show("trend") && mkResult && peaksSorted && (
               <div className="report-section">
-                <h2 className="text-base font-semibold text-gray-800 mb-2 border-b border-gray-200 pb-1">
-                  Trend Analysis — Annual Peak Flows
-                </h2>
+                <SectionHeader id="trend" />
 
                 {/* MK summary paragraph */}
                 <div className="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-sm mb-4">
