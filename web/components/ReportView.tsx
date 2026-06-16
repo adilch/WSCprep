@@ -242,7 +242,7 @@ export function ReportView({ stationId, station }: Props) {
 
         {/* ── Section 1: Header ────────────────────────────────────────────── */}
         <div className="border-b-2 border-gray-800 pb-4">
-          <div className="flex justify-between items-start">
+          <div className="flex justify-between items-start flex-wrap gap-3">
             <div>
               <p className="text-xs text-gray-500 font-mono mb-0.5">{stationId}</p>
               <h1 className="text-2xl font-bold text-gray-900">{station.name}</h1>
@@ -257,7 +257,7 @@ export function ReportView({ stationId, station }: Props) {
           </div>
 
           {/* Station metadata grid */}
-          <div className="grid grid-cols-3 gap-4 mt-4 text-sm">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mt-4 text-sm">
             <div>
               <p className="text-xs text-gray-500 uppercase tracking-wide">Status</p>
               <p className="font-medium mt-0.5">
@@ -362,7 +362,7 @@ export function ReportView({ stationId, station }: Props) {
 
             {/* ── Descriptive stats strip ─────────────────────────────────── */}
             {show("summary") && descStats && (
-              <div className="grid grid-cols-5 gap-3 text-sm">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
                 {[
                   ["Mean Q", `${fmt(descStats.mean, 1)} m³/s`],
                   ["Median Q", `${fmt(descStats.median, 1)} m³/s`],
@@ -478,7 +478,7 @@ export function ReportView({ stationId, station }: Props) {
             {show("peaks") && peaksSorted && peaksSorted.length >= 5 && (
               <div className="report-section">
                 <SectionHeader id="peaks" />
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Annual peaks bar chart */}
                   <div className="report-chart">
                     <Plot
