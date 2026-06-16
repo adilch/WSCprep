@@ -262,6 +262,15 @@ export function MapPage({ stations, meta }: { stations: Station[]; meta: Catalog
           </select>
         </div>
 
+        {/* Compare stations link */}
+        <Link
+          href="/compare"
+          className="text-sm border border-gray-300 rounded px-3 py-1.5 hover:bg-white transition-colors shrink-0"
+          title="Compare multiple stations side by side"
+        >
+          ⇄ Compare
+        </Link>
+
         <span className="text-xs text-gray-500 ml-auto shrink-0">
           {strings.map.showingOf(visible.length, stations.length)}
           {showFavOnly && <span className="ml-1 text-amber-600">(favourites)</span>}
